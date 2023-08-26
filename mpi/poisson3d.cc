@@ -1,15 +1,15 @@
-#include <mpi.h>
 #include <stdlib.h>
 #include <string>
 #include <iostream>
 #include <algorithm>
+#include <mpi.h>
 
-void CopySendBuf(double ****phi, int iStart, int iEnd,
+void CopySendBuf(double ****phi, int t, int iStart, int iEnd,
                   int jStart, int jEnd, 
                   int kStart, int kEnd, 
                   int disp, int dir, double* fieldSend, int MaxBufLen);
 
-void CopyRecvBuf(double ****phi, int iStart, int iEnd, 
+void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, 
                   int jStart, int jEnd, 
                   int kStart, int kEnd, 
                   int disp, int dir, double* fieldRecv, int MaxBufLen);
@@ -39,11 +39,9 @@ int main(int argc, char* argv[])
 	  
 	  double eps, maxdelta, h;
 	  double (****phi), *fieldSend, *fieldRecv;
-
 		MPI_Init(&argc, &argv);
 		ierr = MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
 		ierr = MPI_Comm_rank(MPI_COMM_WORLD, &myid);
-		
 		// TODO read parameters from file
 		if (myid == 0)
 		{
@@ -66,8 +64,8 @@ int main(int argc, char* argv[])
 		    ierr = MPI_Abort(MPI_COMM_WORLD, tmp);
 		  }
 		  
-		  int spat_dim[] = {tmp, tmp, tmp};
-		  int pbc_check[] = {false, false, false};
+		  spat_dim[0] = spat_dim[1] = spat_dim[2] = tmp;
+		  pbc_check[0] = pbc_check[1] = pbc_check[2] = false;
 		}
 		
 		ierr = MPI_Bcast(spat_dim, 3, MPI_INTEGER, 0, MPI_COMM_WORLD);
@@ -132,7 +130,11 @@ int main(int argc, char* argv[])
       {
         phi[i][j] = new double*[kEnd + 1 - kStart];
         for (int k = 0; k < kEnd - kStart; ++k)
+        {
           phi[i][j][k] = new double[2];
+          phi[i][j][k][0]=0.;
+          phi[i][j][k][1]=0.;
+        }
       }
     }
 		
@@ -186,7 +188,7 @@ int main(int argc, char* argv[])
             
           if (dest != MPI_PROC_NULL)
           {
-            CopySendBuf(phi, iStart, iEnd, jStart, jEnd, kStart, kEnd,
+            CopySendBuf(phi, t0, iStart, iEnd, jStart, jEnd, kStart, kEnd,
             disp, dir, fieldSend, MaxBufLen);
             MPI_Send(fieldSend, totmsgsize[dir], MPI_DOUBLE_PRECISION, dest, tag, GRID_COMM_WORLD);
           }
@@ -194,7 +196,7 @@ int main(int argc, char* argv[])
           if (source != MPI_PROC_NULL)
           {
             MPI_Wait(&req, &status);
-            CopyRecvBuf(phi, iStart, iEnd, jStart, jEnd, kStart, kEnd,
+            CopyRecvBuf(phi, t0, iStart, iEnd, jStart, jEnd, kStart, kEnd,
                         disp, dir, fieldRecv, MaxBufLen);
           }
         }
@@ -205,9 +207,10 @@ int main(int argc, char* argv[])
       MPI_Allreduce(MPI_IN_PLACE, &maxdelta, 1, MPI_DOUBLE_PRECISION, MPI_MAX, GRID_COMM_WORLD);
       
       iter += 1;
-      if (myid == 1) {
+      if (myid == 0) {
         std::cout << iter << ", " << maxdelta;
-        tmp = t0; t0 = t1; t1 = tmp;
+        std::swap(t0, t1);
+//        tmp = t0; t0 = t1; t1 = tmp;
       }
     }
     
@@ -215,7 +218,7 @@ int main(int argc, char* argv[])
 		return ierr;
 }
 
-void CopySendBuf(double ****phi, int iStart, int iEnd, 
+void CopySendBuf(double ****phi, int t, int iStart, int iEnd, 
                   int jStart, int jEnd, 
                   int kStart, int kEnd, 
                   int disp, int direction, double* fieldSend, int MaxBufLen)
@@ -223,12 +226,12 @@ void CopySendBuf(double ****phi, int iStart, int iEnd,
   int i1, i2, j1, j2, k1, k2, c;
   int i,j,k;
   
-  if (direction < 1 || direction > 3)
+  if (direction < 0 || direction > 2)
   {
     std::cout << "CSB: dir is wrong\n";
     exit(1);
   }
-  if (disp != 1 || disp != -1)
+  if (disp != 1 && disp != -1)
   {
     std::cout << "CSB: disp is wrong\n";
     exit(1);
@@ -270,13 +273,13 @@ void CopySendBuf(double ****phi, int iStart, int iEnd,
     for (int j = j1; j < j2; ++j)
       for (int i = i1; i < i2; ++i)
       {
-        fieldSend[c] = phi[i][j][k][0];
+        fieldSend[c] = phi[i][j][k][t];
         c += 1;
       }
   return;
 }
 
-void CopyRecvBuf(double ****phi, int iStart, int iEnd, 
+void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, 
                   int jStart, int jEnd, 
                   int kStart, int kEnd, 
                   int disp, int dir, double* fieldRecv, int MaxBufLen)
@@ -284,12 +287,12 @@ void CopyRecvBuf(double ****phi, int iStart, int iEnd,
   int i1, i2, j1, j2, k1, k2, c;
   int i,j,k;
   
-  if (dir < 1 || dir > 3)
+  if (dir < 0 || dir > 2)
   {
     std::cout << "CRB: dir is wrong\n";
     exit(1);
   }
-  if (disp != 1 || disp != -1)
+  if (disp != 1 && disp != -1)
   {
     std::cout << "CRB: disp is wrong\n";
     exit(1);
@@ -331,7 +334,7 @@ void CopyRecvBuf(double ****phi, int iStart, int iEnd,
     for (int j = j1; j < j2; ++j)
       for (int i = i1; i < i2; ++i)
       {
-        phi[i][j][k][0] = fieldRecv[c];
+        phi[i][j][k][t] = fieldRecv[c];
         c += 1;
       }
   return;

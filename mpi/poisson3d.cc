@@ -303,15 +303,19 @@ void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
   }
 
   if (direction == 0) {
+    // skip the halo
     i1 = iStart + 1;
     i2 = iEnd - 1;
     j1 = jStart + 1;
     j2 = jEnd - 1;
 
     if (disp == -1)
+      // upper face
       k1 = k2 = 1;
     else
+      // lower face
       k1 = k2 = kEnd - 1;
+
   } else if (direction == 1) {
     i1 = iStart + 1;
     i2 = iEnd - 1;
@@ -331,10 +335,10 @@ void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     if (disp == -1)
       i1 = i2 = 1;
     else
-      i1 = i2 = jEnd - 1;
+      i1 = i2 = iEnd - 1;
   }
 
-  c = 1;
+  c = 0;
   for (int k = k1; k < k2; ++k)
     for (int j = j1; j < j2; ++j)
       for (int i = i1; i < i2; ++i) {
@@ -344,11 +348,11 @@ void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
   return;
 }
 
+// Copy into the halo cells of phi the values in the 1D receive buffer
 void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
                  int jEnd, int kStart, int kEnd, int disp, int dir,
                  double *fieldRecv, int MaxBufLen) {
   int i1, i2, j1, j2, k1, k2, c;
-  int i, j, k;
 
   if (dir < 0 || dir > 2) {
     std::cout << "CRB: dir is wrong\n";
@@ -365,10 +369,12 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     j1 = jStart + 1;
     j2 = jEnd - 1;
 
+    // We are receiving into the halo cells on the correct face
     if (disp == 1)
       k1 = k2 = 0;
     else
       k1 = k2 = kEnd;
+
   } else if (dir == 1) {
     i1 = iStart + 1;
     i2 = iEnd - 1;
@@ -379,6 +385,7 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
       j1 = j2 = 0;
     else
       j1 = j2 = jEnd;
+
   } else if (dir == 2) {
     j1 = jStart + 1;
     j2 = jEnd - 1;
@@ -388,7 +395,7 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     if (disp == 1)
       i1 = i2 = 0;
     else
-      i1 = i2 = jEnd;
+      i1 = i2 = iEnd;
   }
 
   c = 1;
@@ -467,5 +474,5 @@ void write_rectilinear_grid(int id, int nx, int ny, int nz, double ****var,
   }
   fout.close();
 
-  cout << "Wrote Cartesian grid into rect.vtk" << endl;
+  cout << "Wrote Cartesian grid into rect" << id << ".vtk" << endl;
 }

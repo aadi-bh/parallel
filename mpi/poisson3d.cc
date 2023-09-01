@@ -74,10 +74,10 @@ int main(int argc, char *argv[]) {
     std::cout << "Reading poisson3d.in \n";
     std::ifstream input;
 
-    tmp = 20;
+    tmp = 40;
 
     // Number of ranks for each dimension
-    proc_dim[0] = 1;
+    proc_dim[0] = 2;
     proc_dim[1] = 1;
     proc_dim[2] = 1;
 
@@ -485,10 +485,12 @@ void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
   int nx = i2 - i1;
   int ny = j2 - j1;
   int nz = k2 - k1;
+
   ofstream fout;
   char filename[64];
   snprintf(filename, 64, "r%d-sol-t%d.vtk", id, iter);
   fout.open(filename);
+
   fout << "# vtk DataFile Version 3.0" << endl;
   fout << "Cartesian grid" << endl;
   fout << "ASCII" << endl;
@@ -514,9 +516,9 @@ void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
   fout << "POINT_DATA " << nx * ny * nz << endl;
   fout << "SCALARS density float" << endl;
   fout << "LOOKUP_TABLE default" << endl;
-  for (int k = k1; k <= k2; ++k) {
-    for (int j = j1; j <= j2; ++j) {
-      for (int i = i1; i <= i2; ++i)
+  for (int k = k1; k < k2; ++k) {
+    for (int j = j1; j < j2; ++j) {
+      for (int i = i1; i < i2; ++i)
         fout << var[i][j][k][(int)t] << " ";
       fout << endl;
     }

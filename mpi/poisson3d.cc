@@ -6,6 +6,7 @@
 #include <mpi.h>
 #include <stdlib.h>
 #include <string>
+#include <type_traits>
 
 void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
                  int jEnd, int kStart, int kEnd, int disp, int dir,
@@ -17,20 +18,24 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
 
 void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
                   double &maxdelta);
-void write_rectilinear_grid(int id, int **start_stop, double xlim[2],
-                            double ylim[2], double zlim[2], double ****var,
-                            double t, int c);
+
+void write_rectilinear_grid(int id, int, int, int, int, int, int , double* xlim,
+                            double* ylim, double* zlim, double ****var,
+                            double t, int iter, int c);
 
 int main(int argc, char *argv[]) {
+  constexpr double xmax = 1;
+  constexpr double ymax = 1;
+  constexpr double zmax = 1;
   // Mark whether boundaries are periodic or not
   int pbc_check[3];
   // Number of cells in each dimension
   int spat_dim[3];
   // Number of processes in each dimension
   int proc_dim[3];
-  // TODO what's loca_dim?
+  // dimensions of array belonging to just this rank
   int loca_dim[3];
-  // TODO I have a guess for what's mycoord
+  // Coordinates of this rank in the MPI Grid
   int mycoord[3];
   int totmsgsize[3];
   int i, myid, numprocs, ierr, itermax, tag;
@@ -108,7 +113,7 @@ int main(int argc, char *argv[]) {
 
   // TODO assuming dx = dy = dz, so no need for separate hx, hy, hz
   // Minus 1 because The last cell will be at the end
-  h = 1. / (spat_dim[0] - 1);
+  h = xmax / (spat_dim[0] - 1);
 
   if (myid == 0) {
     std::cout << "Spatial Grid: " << spat_dim[0] << ' ' << spat_dim[1] << ' '
@@ -152,6 +157,12 @@ int main(int argc, char *argv[]) {
     if (mycoord[i] < spat_dim[i] % proc_dim[i])
       loca_dim[i] += 1;
   }
+
+  // TODO Fix this!
+  double xlim[] = {(myid_grid * 0.5),
+                (0.5 + myid_grid * 0.5)};
+  double ylim[] = {0, 1};
+  double zlim[] = {0, 1};
 
   // Solution variables
   // One layer of ghost points on all sides, so 2 extra indices
@@ -240,6 +251,7 @@ int main(int argc, char *argv[]) {
       // non-halo.
       udim[1][direction] = loca_dim[direction] + 2 - 2 - 1;
   }
+
   if (myid_grid == 0)
     assert(udim[0][0] == 2 && udim[0][1] == 2 && udim[0][2] == 2 &&
            udim[1][0] == 3 && udim[1][1] == 5 && udim[1][2] == 5);
@@ -305,7 +317,9 @@ int main(int argc, char *argv[]) {
     MPI_Allreduce(MPI_IN_PLACE, &maxdelta, 1, MPI_DOUBLE_PRECISION, MPI_MAX,
                   GRID_COMM_WORLD);
 
-//    write_rectilinear_grid(myid_grid, iEnd, jEnd, kEnd, ({0,1}), ({0,1}), ({0,1}), phi, iter, t1);
+    write_rectilinear_grid(myid_grid, iStart + 1, jStart + 1, kStart + 1,
+                           iEnd - 1, jEnd - 1, kEnd - 1, &(xlim[0]), &(ylim[0]), &(zlim[0]), phi,
+                           t1, iter, 0);
 
     if (myid == 0) {
       std::cout << iter << ", " << maxdelta << std::endl;
@@ -316,7 +330,9 @@ int main(int argc, char *argv[]) {
 
   ierr = MPI_Finalize();
 
-//  write_rectilinear_grid(myid_grid, loca_dim[2], loca_dim[1], loca_dim[0], phi, 0., 1);
+  write_rectilinear_grid(myid_grid, iStart + 1, jStart + 1, kStart + 1,
+                           iEnd - 1, jEnd - 1, kEnd - 1, &(xlim[0]), &(ylim[0]), &(zlim[0]), phi,
+                           t0, itermax, 0);
   return ierr;
 }
 
@@ -469,19 +485,17 @@ void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
 
 // from
 // https://github.com/cpraveen/cfdlab/blob/ee0a423956f216d7120e338c4026391c48b219e5/vtk/vtk_struct.cc#L7
-void write_rectilinear_grid(int id, int **start_stop, double xlim[2],
-                            double ylim[2], double zlim[2], double ****var,
-                            double t, int c) {
-  std::cout << "WRG out of service\n";
-  return;
+void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2, int k2 , double* xlim,
+                            double* ylim, double* zlim, double ****var,
+                            double t, int iter, int c) {
   using namespace std;
 
-  int nx = start_stop[1][0] - start_stop[0][0];
-  int ny = start_stop[1][1] - start_stop[0][1];
-  int nz = start_stop[1][2] - start_stop[0][2];
+  int nx = i2-i1;
+  int ny = j2-j1;
+  int nz = k2-k1;
   ofstream fout;
   char filename[64];
-  snprintf(filename, 64, "r%d-sol-t%d.vtk", id, (int)t);
+  snprintf(filename, 64, "r%d-sol-t%d.vtk", id, iter);
   fout.open(filename);
   fout << "# vtk DataFile Version 3.0" << endl;
   fout << "Cartesian grid" << endl;
@@ -494,24 +508,25 @@ void write_rectilinear_grid(int id, int **start_stop, double xlim[2],
   fout << c << endl;
   fout << "DIMENSIONS " << nx << " " << ny << " " << nz << endl;
   fout << "X_COORDINATES " << nx << " float" << endl;
-  for (int i = start_stop[0][0]; i < start_stop[1][0]; ++i)
+  for (int i = i1; i < i2; ++i)
     fout << xlim[0] + (xlim[1] - xlim[0]) * i * 1. / (nx - 1) << " ";
   fout << endl;
   fout << "Y_COORDINATES " << ny << " float" << endl;
-  for (int j = start_stop[0][1]; j < start_stop[1][1]; ++j)
+  for (int j = j1; j < j2; ++j)
     fout << ylim[0] + (ylim[1] - ylim[0]) * j * 1. / (ny - 1) << " ";
   fout << endl;
   fout << "Z_COORDINATES " << nz << " float" << endl;
-  for (int k = start_stop[0][2]; k < start_stop[1][2]; ++k)
+  for (int k = k1; k < k2; ++k)
     fout << zlim[0] + (zlim[1] - zlim[0]) * k * 1. / (nz - 1) << " ";
 
   fout << "POINT_DATA " << nx * ny * nz << endl;
   fout << "SCALARS density float" << endl;
   fout << "LOOKUP_TABLE default" << endl;
-  for (int k = start_stop[0][2]; k < start_stop[1][2]; ++k)
-    for (int j = start_stop[0][1]; j < start_stop[1][1]; ++j){ 
-      for (int i = start_stop[0][0]; i < start_stop[1][0]; ++i)
+  for (int k = k1; k <= k2; ++k)
+    for (int j = j1; j <= j2; ++j) {
+      for (int i = i1; i <= i2; ++i){
         fout << var[i][j][k][(int)t] << " ";
+      }
       fout << endl;
     }
   fout.close();

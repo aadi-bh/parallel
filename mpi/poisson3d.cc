@@ -1,12 +1,17 @@
+/*
+ * 3D Poisson Equation
+ * -𝚫(u) = 1 in [0,1] x [0,1] x [0,1]
+ *  and u = 0 on the boundary
+ *
+ *  Translated from Fortran version TODO
+ */
 #include <algorithm>
-#include <cstdio>
+#include <cmath>
+#include <stdio.h>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <mpi.h>
-#include <stdlib.h>
 #include <string>
-#include <type_traits>
 
 void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
                  int jEnd, int kStart, int kEnd, int disp, int dir,
@@ -24,9 +29,6 @@ void write_rectilinear_grid(int id, int, int, int, int, int, int, double *xlim,
                             double t, int iter, int c);
 
 int main(int argc, char *argv[]) {
-  constexpr double xmax = 1;
-  constexpr double ymax = 1;
-  constexpr double zmax = 1;
   // Mark whether boundaries are periodic or not
   int pbc_check[3];
   // Number of cells in each dimension
@@ -70,20 +72,28 @@ int main(int argc, char *argv[]) {
   ierr = MPI_Comm_rank(MPI_COMM_WORLD, &myid);
 
   if (myid == 0) {
-    // TODO Don't hardcode these values
     std::cout << "Reading poisson3d.in \n";
-    std::ifstream input;
+    std::fstream input;
+    std::string line;
+    input.open("poisson3d.in");
 
-    tmp = 20;
+    getline(input, line);
+    sscanf(line.c_str(), "%d", &tmp);
 
     // Number of ranks for each dimension
-    proc_dim[0] = 1;
-    proc_dim[1] = 1;
-    proc_dim[2] = 2;
+    getline(input, line);
+    sscanf(line.c_str(), "%d %d %d", &proc_dim[0], &proc_dim[1], &proc_dim[2]);
+    std::cout << tmp<< std::endl;
+    std::cout << proc_dim[1] << std::endl;
 
-    itermax = 10000;
+    getline(input, line);
+    sscanf(line.c_str(), "%d", &itermax);
 
-    eps = 1e-10;
+    // Here we have to work around the Fortran formatting of a double
+    int exp;
+    getline(input, line);
+    sscanf(line.c_str(), "%lfd%d", &eps, &exp);
+    eps = eps * pow(10, exp);
 
     // Total number of processes = product of the number of processes along each
     // dimension.
@@ -113,9 +123,9 @@ int main(int argc, char *argv[]) {
   // Partition ranks into a 3D topology, with proc_dim ranks along each dim
   ierr = MPI_Dims_create(numprocs, 3, proc_dim);
 
-  // TODO assuming dx = dy = dz, so no need for separate hx, hy, hz
-  // Minus 1 because The last cell will be at the end
-  h = xmax / (spat_dim[0] - 1);
+  // Assuming dx = dy = dz, so no need for separate hx, hy, hz
+  // Minus 1 because the last cell will be at the end
+  h = 1. / (spat_dim[0] - 1);
 
   if (myid == 0) {
     std::cout << "Spatial Grid: " << spat_dim[0] << ' ' << spat_dim[1] << ' '
@@ -160,7 +170,7 @@ int main(int argc, char *argv[]) {
       loca_dim[i] += 1;
   }
 
-  // TODO Fix this!
+  // TODO This isn't accurate when spat_dim not div by proc_dim
   double xlim[] = {mycoord[0] * loca_dim[0] * h,
                    (mycoord[0] + 1) * loca_dim[0] * h};
   double ylim[] = {mycoord[1] * loca_dim[1] * h,
@@ -171,7 +181,7 @@ int main(int argc, char *argv[]) {
   // Solution variables
   // One layer of ghost points on all sides, so 2 extra indices
   // These are the first and last indices along each direction.
-  // So iEnd is the number of cells along each dimension, not last index.
+  // So iEnd is the number (count) of cells along each dimension, not last index.
   iStart = 0;
   iEnd = loca_dim[0] + 2;
   jStart = 0;
@@ -181,7 +191,7 @@ int main(int argc, char *argv[]) {
 
   // Initialise the solution array: phi[i][j][k][t] with zeroes
   // where t = 0 and 1 so that we can hold one older solution as well
-  // phi
+  // Boundary conditions are Dirichlet, zero everywhere.
   phi = new double ***[iEnd - iStart];
   for (int i = 0; i < iEnd - iStart; ++i) {
     phi[i] = new double **[jEnd - jStart];
@@ -197,7 +207,7 @@ int main(int argc, char *argv[]) {
 
   MaxBufLen = 0;
 
-  // Sizes of each face
+  // Size of each face
   totmsgsize[2] = loca_dim[0] * loca_dim[1];
   MaxBufLen = std::max(MaxBufLen, totmsgsize[2]);
 
@@ -308,11 +318,6 @@ int main(int argc, char *argv[]) {
     MPI_Allreduce(MPI_IN_PLACE, &maxdelta, 1, MPI_DOUBLE_PRECISION, MPI_MAX,
                   GRID_COMM_WORLD);
 
-    // write_rectilinear_grid(myid_grid, iStart + 1, jStart + 1, kStart + 1,
-    //                        iEnd - 1, jEnd - 1, kEnd - 1, &(xlim[0]),
-    //                        &(ylim[0]),
-    //                        &(zlim[0]), phi, t1, iter, 0);
-
     if (myid == 0) {
       std::cout << iter << ", " << maxdelta << std::endl;
     }
@@ -345,47 +350,48 @@ void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
   }
 
   // i2 and iEnd are both counts, so -1 is enough
-  if (direction == 0) {
+  if (direction == 2) {
     // So we are dealing with a face parallel to the z-axis
     // skip the halo
+    // Additional -1 because we are converting counts to indices.
     i1 = iStart + 1;
-    i2 = iEnd - 1;
+    i2 = iEnd - 2;
     j1 = jStart + 1;
-    j2 = jEnd - 1;
+    j2 = jEnd - 2;
 
     if (disp == -1)
       // upper face
       k1 = k2 = 1;
     else
       // lower face
-      k1 = k2 = kEnd - 1;
+      k1 = k2 = kEnd - 2;
 
   } else if (direction == 1) {
     i1 = iStart + 1;
-    i2 = iEnd - 1;
+    i2 = iEnd - 2;
     k1 = kStart + 1;
-    k2 = kEnd - 1;
+    k2 = kEnd - 2;
 
     if (disp == -1)
       j1 = j2 = 1;
     else
       j1 = j2 = jEnd - 1;
-  } else if (direction == 2) {
+  } else if (direction == 0) {
     j1 = jStart + 1;
-    j2 = jEnd - 1;
+    j2 = jEnd - 2;
     k1 = kStart + 1;
-    k2 = kEnd - 1;
+    k2 = kEnd - 2;
 
     if (disp == -1)
       i1 = i2 = 1;
     else
-      i1 = i2 = iEnd - 1;
+      i1 = i2 = iEnd - 2;
   }
 
   c = 0;
-  for (int k = k1; k < k2; ++k)
-    for (int j = j1; j < j2; ++j)
-      for (int i = i1; i < i2; ++i) {
+  for (int k = k1; k <= k2; ++k)
+    for (int j = j1; j <= j2; ++j)
+      for (int i = i1; i <= i2; ++i) {
         fieldSend[c] = phi[i][j][k][t];
         c += 1;
       }
@@ -407,12 +413,12 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     exit(1);
   }
 
-  if (dir == 0) {
+  if (dir == 2) {
     // Same logic as in Send
     i1 = iStart + 1;
-    i2 = iEnd - 1;
+    i2 = iEnd - 2;
     j1 = jStart + 1;
-    j2 = jEnd - 1;
+    j2 = jEnd - 2;
 
     // We are receiving into the halo cells on the correct face
     if (disp == 1)
@@ -420,35 +426,35 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
       k1 = k2 = 0;
     else
       // receiving from below
-      k1 = k2 = kEnd;
+      k1 = k2 = kEnd-1;
 
   } else if (dir == 1) {
     i1 = iStart + 1;
-    i2 = iEnd - 1;
+    i2 = iEnd - 2;
     k1 = kStart + 1;
-    k2 = kEnd - 1;
+    k2 = kEnd - 2;
 
     if (disp == 1)
       j1 = j2 = 0;
     else
-      j1 = j2 = jEnd;
+      j1 = j2 = jEnd-1;
 
-  } else if (dir == 2) {
+  } else if (dir == 0) {
     j1 = jStart + 1;
-    j2 = jEnd - 1;
+    j2 = jEnd - 2;
     k1 = kStart + 1;
-    k2 = kEnd - 1;
+    k2 = kEnd - 2;
 
     if (disp == 1)
       i1 = i2 = 0;
     else
-      i1 = i2 = iEnd;
+      i1 = i2 = iEnd-1;
   }
 
   c = 0;
-  for (int k = k1; k < k2; ++k)
-    for (int j = j1; j < j2; ++j)
-      for (int i = i1; i < i2; ++i) {
+  for (int k = k1; k <= k2; ++k)
+    for (int j = j1; j <= j2; ++j)
+      for (int i = i1; i <= i2; ++i) {
         phi[i][j][k][t] = fieldRecv[c];
         c += 1;
       }
@@ -477,6 +483,9 @@ void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
 
 // from
 // https://github.com/cpraveen/cfdlab/blob/ee0a423956f216d7120e338c4026391c48b219e5/vtk/vtk_struct.cc#L7
+/*
+ * Writes out a VTK file with the given slice of an array
+ */
 void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
                             int k2, double *xlim, double *ylim, double *zlim,
                             double ****var, double t, int iter, int c) {

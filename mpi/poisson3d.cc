@@ -74,12 +74,12 @@ int main(int argc, char *argv[]) {
     std::cout << "Reading poisson3d.in \n";
     std::ifstream input;
 
-    tmp = 100;
+    tmp = 20;
 
     // Number of ranks for each dimension
-    proc_dim[0] = 2;
-    proc_dim[1] = 2;
-    proc_dim[2] = 2;
+    proc_dim[0] = 1;
+    proc_dim[1] = 1;
+    proc_dim[2] = 1;
 
     itermax = 10000;
 
@@ -161,9 +161,12 @@ int main(int argc, char *argv[]) {
   }
 
   // TODO Fix this!
-  double xlim[] = {mycoord[0] * loca_dim[0] * h, (mycoord[0]+1) * loca_dim[0] * h};
-  double ylim[] = {mycoord[1] * loca_dim[1] * h, (mycoord[1]+1) * loca_dim[1] * h};
-  double zlim[] = {mycoord[2] * loca_dim[2] * h, (mycoord[2]+1) * loca_dim[2] * h};
+  double xlim[] = {mycoord[0] * loca_dim[0] * h,
+                   (mycoord[0] + 1) * loca_dim[0] * h};
+  double ylim[] = {mycoord[1] * loca_dim[1] * h,
+                   (mycoord[1] + 1) * loca_dim[1] * h};
+  double zlim[] = {mycoord[2] * loca_dim[2] * h,
+                   (mycoord[2] + 1) * loca_dim[2] * h};
 
   // Solution variables
   // One layer of ghost points on all sides, so 2 extra indices
@@ -305,9 +308,10 @@ int main(int argc, char *argv[]) {
     MPI_Allreduce(MPI_IN_PLACE, &maxdelta, 1, MPI_DOUBLE_PRECISION, MPI_MAX,
                   GRID_COMM_WORLD);
 
-    //write_rectilinear_grid(myid_grid, iStart + 1, jStart + 1, kStart + 1,
-    //                       iEnd - 1, jEnd - 1, kEnd - 1, &(xlim[0]), &(ylim[0]),
-    //                       &(zlim[0]), phi, t1, iter, 0);
+    // write_rectilinear_grid(myid_grid, iStart + 1, jStart + 1, kStart + 1,
+    //                        iEnd - 1, jEnd - 1, kEnd - 1, &(xlim[0]),
+    //                        &(ylim[0]),
+    //                        &(zlim[0]), phi, t1, iter, 0);
 
     if (myid == 0) {
       std::cout << iter << ", " << maxdelta << std::endl;
@@ -510,13 +514,14 @@ void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
   fout << "POINT_DATA " << nx * ny * nz << endl;
   fout << "SCALARS density float" << endl;
   fout << "LOOKUP_TABLE default" << endl;
-  for (int k = k1; k <= k2; ++k)
+  for (int k = k1; k <= k2; ++k) {
     for (int j = j1; j <= j2; ++j) {
-      for (int i = i1; i <= i2; ++i) {
+      for (int i = i1; i <= i2; ++i)
         fout << var[i][j][k][(int)t] << " ";
-      }
       fout << endl;
     }
+    fout << endl;
+  }
   fout.close();
 
   cout << "Wrote Cartesian grid into " << filename << endl;

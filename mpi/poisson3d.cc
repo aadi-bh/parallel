@@ -19,8 +19,8 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
 void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
                   double &maxdelta);
 
-void write_rectilinear_grid(int id, int, int, int, int, int, int , double* xlim,
-                            double* ylim, double* zlim, double ****var,
+void write_rectilinear_grid(int id, int, int, int, int, int, int, double *xlim,
+                            double *ylim, double *zlim, double ****var,
                             double t, int iter, int c);
 
 int main(int argc, char *argv[]) {
@@ -71,15 +71,17 @@ int main(int argc, char *argv[]) {
 
   if (myid == 0) {
     // TODO Don't hardcode these values
-    tmp = 6;
-    assert(tmp == 6);
+    std::cout << "Reading poisson3d.in \n";
+    std::ifstream input;
+
+    tmp = 100;
 
     // Number of ranks for each dimension
     proc_dim[0] = 2;
-    proc_dim[1] = 1;
-    proc_dim[2] = 1;
+    proc_dim[1] = 2;
+    proc_dim[2] = 2;
 
-    itermax = 4;
+    itermax = 10000;
 
     eps = 1e-10;
 
@@ -159,10 +161,9 @@ int main(int argc, char *argv[]) {
   }
 
   // TODO Fix this!
-  double xlim[] = {(myid_grid * 0.5),
-                (0.5 + myid_grid * 0.5)};
-  double ylim[] = {0, 1};
-  double zlim[] = {0, 1};
+  double xlim[] = {mycoord[0] * loca_dim[0] * h, (mycoord[0]+1) * loca_dim[0] * h};
+  double ylim[] = {mycoord[1] * loca_dim[1] * h, (mycoord[1]+1) * loca_dim[1] * h};
+  double zlim[] = {mycoord[2] * loca_dim[2] * h, (mycoord[2]+1) * loca_dim[2] * h};
 
   // Solution variables
   // One layer of ghost points on all sides, so 2 extra indices
@@ -174,9 +175,6 @@ int main(int argc, char *argv[]) {
   jEnd = loca_dim[1] + 2;
   kStart = 0;
   kEnd = loca_dim[2] + 2;
-  assert(iEnd == 5);
-  assert(jEnd == 8);
-  assert(kEnd == 8);
 
   // Initialise the solution array: phi[i][j][k][t] with zeroes
   // where t = 0 and 1 so that we can hold one older solution as well
@@ -205,8 +203,6 @@ int main(int argc, char *argv[]) {
 
   totmsgsize[0] = loca_dim[1] * loca_dim[2];
   MaxBufLen = std::max(MaxBufLen, totmsgsize[0]);
-
-  assert(MaxBufLen == 36);
 
   // Buffers to send and receive data
   fieldSend = new double[MaxBufLen];
@@ -251,13 +247,6 @@ int main(int argc, char *argv[]) {
       // non-halo.
       udim[1][direction] = loca_dim[direction] + 2 - 2 - 1;
   }
-
-  if (myid_grid == 0)
-    assert(udim[0][0] == 2 && udim[0][1] == 2 && udim[0][2] == 2 &&
-           udim[1][0] == 3 && udim[1][1] == 5 && udim[1][2] == 5);
-  if (myid_grid == 1)
-    assert(udim[0][0] == 1 && udim[0][1] == 2 && udim[0][2] == 2 &&
-           udim[1][0] == 2 && udim[1][1] == 5 && udim[1][2] == 5);
 
   // Begin iterations
   maxdelta = 2. * eps;
@@ -310,16 +299,15 @@ int main(int argc, char *argv[]) {
 
     // All communication done, we have the latest values. Now compute new values
     Jacobi_sweep(phi, t0, t1, udim, h, maxdelta);
-    std::cout << "Maxdelta in rank " << myid_grid << " is " << maxdelta
-              << std::endl;
-    // Find the largest delta amongst all ranks, and set it to the max_delta in
+
+    // Find the largest delta amongst all ranks, and set it to the max_delta inO
     // every rank
     MPI_Allreduce(MPI_IN_PLACE, &maxdelta, 1, MPI_DOUBLE_PRECISION, MPI_MAX,
                   GRID_COMM_WORLD);
 
-    write_rectilinear_grid(myid_grid, iStart + 1, jStart + 1, kStart + 1,
-                           iEnd - 1, jEnd - 1, kEnd - 1, &(xlim[0]), &(ylim[0]), &(zlim[0]), phi,
-                           t1, iter, 0);
+    //write_rectilinear_grid(myid_grid, iStart + 1, jStart + 1, kStart + 1,
+    //                       iEnd - 1, jEnd - 1, kEnd - 1, &(xlim[0]), &(ylim[0]),
+    //                       &(zlim[0]), phi, t1, iter, 0);
 
     if (myid == 0) {
       std::cout << iter << ", " << maxdelta << std::endl;
@@ -331,8 +319,8 @@ int main(int argc, char *argv[]) {
   ierr = MPI_Finalize();
 
   write_rectilinear_grid(myid_grid, iStart + 1, jStart + 1, kStart + 1,
-                           iEnd - 1, jEnd - 1, kEnd - 1, &(xlim[0]), &(ylim[0]), &(zlim[0]), phi,
-                           t0, itermax, 0);
+                         iEnd - 1, jEnd - 1, kEnd - 1, &(xlim[0]), &(ylim[0]),
+                         &(zlim[0]), phi, t0, itermax, 0);
   return ierr;
 }
 
@@ -470,9 +458,9 @@ void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
 
   maxdelta = 0.;
 
-  for (int i = udim[0][0]; i <= udim[1][0]; ++i)
+  for (int k = udim[0][2]; k <= udim[1][2]; ++k)
     for (int j = udim[0][1]; j <= udim[1][1]; ++j)
-      for (int k = udim[0][2]; k <= udim[1][2]; ++k) {
+      for (int i = udim[0][0]; i <= udim[1][0]; ++i) {
         phi[i][j][k][t1] =
             (phi[i - 1][j][k][t0] + phi[i + 1][j][k][t0] +
              phi[i][j - 1][k][t0] + phi[i][j + 1][k][t0] +
@@ -485,14 +473,14 @@ void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
 
 // from
 // https://github.com/cpraveen/cfdlab/blob/ee0a423956f216d7120e338c4026391c48b219e5/vtk/vtk_struct.cc#L7
-void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2, int k2 , double* xlim,
-                            double* ylim, double* zlim, double ****var,
-                            double t, int iter, int c) {
+void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
+                            int k2, double *xlim, double *ylim, double *zlim,
+                            double ****var, double t, int iter, int c) {
   using namespace std;
 
-  int nx = i2-i1;
-  int ny = j2-j1;
-  int nz = k2-k1;
+  int nx = i2 - i1;
+  int ny = j2 - j1;
+  int nz = k2 - k1;
   ofstream fout;
   char filename[64];
   snprintf(filename, 64, "r%d-sol-t%d.vtk", id, iter);
@@ -524,7 +512,7 @@ void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2, int 
   fout << "LOOKUP_TABLE default" << endl;
   for (int k = k1; k <= k2; ++k)
     for (int j = j1; j <= j2; ++j) {
-      for (int i = i1; i <= i2; ++i){
+      for (int i = i1; i <= i2; ++i) {
         fout << var[i][j][k][(int)t] << " ";
       }
       fout << endl;

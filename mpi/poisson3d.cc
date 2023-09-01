@@ -74,12 +74,12 @@ int main(int argc, char *argv[]) {
     std::cout << "Reading poisson3d.in \n";
     std::ifstream input;
 
-    tmp = 40;
+    tmp = 20;
 
     // Number of ranks for each dimension
-    proc_dim[0] = 2;
+    proc_dim[0] = 1;
     proc_dim[1] = 1;
-    proc_dim[2] = 1;
+    proc_dim[2] = 2;
 
     itermax = 10000;
 
@@ -345,7 +345,7 @@ void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
   }
 
   // i2 and iEnd are both counts, so -1 is enough
-  if (direction == 2) {
+  if (direction == 0) {
     // So we are dealing with a face parallel to the z-axis
     // skip the halo
     i1 = iStart + 1;
@@ -370,7 +370,7 @@ void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
       j1 = j2 = 1;
     else
       j1 = j2 = jEnd - 1;
-  } else if (direction == 0) {
+  } else if (direction == 2) {
     j1 = jStart + 1;
     j2 = jEnd - 1;
     k1 = kStart + 1;
@@ -407,7 +407,7 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     exit(1);
   }
 
-  if (dir == 2) {
+  if (dir == 0) {
     // Same logic as in Send
     i1 = iStart + 1;
     i2 = iEnd - 1;
@@ -433,7 +433,7 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     else
       j1 = j2 = jEnd;
 
-  } else if (dir == 0) {
+  } else if (dir == 2) {
     j1 = jStart + 1;
     j2 = jEnd - 1;
     k1 = kStart + 1;
@@ -481,14 +481,13 @@ void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
                             int k2, double *xlim, double *ylim, double *zlim,
                             double ****var, double t, int iter, int c) {
   using namespace std;
-
   int nx = i2 - i1;
   int ny = j2 - j1;
   int nz = k2 - k1;
 
   ofstream fout;
   char filename[64];
-  snprintf(filename, 64, "r%d-sol-t%d.vtk", id, iter);
+  snprintf(filename, 64, "%dsol%d.vtk", id, id);
   fout.open(filename);
 
   fout << "# vtk DataFile Version 3.0" << endl;
@@ -503,10 +502,10 @@ void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
   fout << "DIMENSIONS " << nx << " " << ny << " " << nz << endl;
   fout << "X_COORDINATES " << nx << " float" << endl;
   for (int i = i1; i < i2; ++i)
-    fout << xlim[0] + (xlim[1] - xlim[0]) * i * 1. / (nx - 1) << " ";
+    fout << xlim[0] + (xlim[1] - xlim[0]) * i * 1. / (nx-1) << " ";
   fout << endl;
   fout << "Y_COORDINATES " << ny << " float" << endl;
-  for (int j = j1; j < j2; ++j)
+  for (int j = j1; j <j2; ++j)
     fout << ylim[0] + (ylim[1] - ylim[0]) * j * 1. / (ny - 1) << " ";
   fout << endl;
   fout << "Z_COORDINATES " << nz << " float" << endl;
@@ -514,7 +513,7 @@ void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
     fout << zlim[0] + (zlim[1] - zlim[0]) * k * 1. / (nz - 1) << " ";
 
   fout << "POINT_DATA " << nx * ny * nz << endl;
-  fout << "SCALARS density float" << endl;
+  fout << "SCALARS density double" << endl;
   fout << "LOOKUP_TABLE default" << endl;
   for (int k = k1; k < k2; ++k) {
     for (int j = j1; j < j2; ++j) {

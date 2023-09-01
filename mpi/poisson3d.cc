@@ -15,9 +15,10 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
                  int jEnd, int kStart, int kEnd, int disp, int dir,
                  double *fieldRecv, int MaxBufLen);
 
-void Jacobi_sweep(int nx, int ny, int nz, double ****phi, int t0, int t1,
-                  int **udim, double h, double &maxdelta);
-void write_rectilinear_grid(int id, int nx, int ny, int nz, double ****var,
+void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
+                  double &maxdelta);
+void write_rectilinear_grid(int id, int **start_stop, double xlim[2],
+                            double ylim[2], double zlim[2], double ****var,
                             double t, int c);
 
 int main(int argc, char *argv[]) {
@@ -65,14 +66,15 @@ int main(int argc, char *argv[]) {
 
   if (myid == 0) {
     // TODO Don't hardcode these values
-    tmp = 10;
+    tmp = 6;
+    assert(tmp == 6);
 
     // Number of ranks for each dimension
     proc_dim[0] = 2;
     proc_dim[1] = 1;
     proc_dim[2] = 1;
 
-    itermax = 10000;
+    itermax = 4;
 
     eps = 1e-10;
 
@@ -152,21 +154,27 @@ int main(int argc, char *argv[]) {
   }
 
   // Solution variables
-  // One layer of ghost points on all sides
+  // One layer of ghost points on all sides, so 2 extra indices
+  // These are the first and last indices along each direction.
+  // So iEnd is the number of cells along each dimension, not last index.
   iStart = 0;
-  iEnd = loca_dim[2] + 1;
+  iEnd = loca_dim[0] + 2;
   jStart = 0;
-  jEnd = loca_dim[1] + 1;
+  jEnd = loca_dim[1] + 2;
   kStart = 0;
-  kEnd = loca_dim[0] + 1;
+  kEnd = loca_dim[2] + 2;
+  assert(iEnd == 5);
+  assert(jEnd == 8);
+  assert(kEnd == 8);
 
   // Initialise the solution array: phi[i][j][k][t] with zeroes
   // where t = 0 and 1 so that we can hold one older solution as well
-  phi = new double ***[iEnd + 1 - iStart];
+  // phi
+  phi = new double ***[iEnd - iStart];
   for (int i = 0; i < iEnd - iStart; ++i) {
-    phi[i] = new double **[jEnd + 1 - jStart];
+    phi[i] = new double **[jEnd - jStart];
     for (int j = 0; j < jEnd - jStart; ++j) {
-      phi[i][j] = new double *[kEnd + 1 - kStart];
+      phi[i][j] = new double *[kEnd - kStart];
       for (int k = 0; k < kEnd - kStart; ++k) {
         phi[i][j][k] = new double[2];
         phi[i][j][k][0] = 0.;
@@ -177,6 +185,7 @@ int main(int argc, char *argv[]) {
 
   MaxBufLen = 0;
 
+  // Sizes of each face
   totmsgsize[2] = loca_dim[0] * loca_dim[1];
   MaxBufLen = std::max(MaxBufLen, totmsgsize[2]);
 
@@ -185,6 +194,8 @@ int main(int argc, char *argv[]) {
 
   totmsgsize[0] = loca_dim[1] * loca_dim[2];
   MaxBufLen = std::max(MaxBufLen, totmsgsize[0]);
+
+  assert(MaxBufLen == 36);
 
   // Buffers to send and receive data
   fieldSend = new double[MaxBufLen];
@@ -201,22 +212,40 @@ int main(int argc, char *argv[]) {
     // topology.
     ierr = MPI_Cart_shift(GRID_COMM_WORLD, direction, displacement, &source,
                           &dest);
-    // If boundary isn't periodic, then shifting out of range will be signified
-    // by NULL
+
+    // Direction = 0 means x-axis;
+    // Displacement = -1 means moving to the left i.e. smaller indices.
+    // So dest is left side, and source is right side
+
+    // If boundary isn't periodic, then shifting out of range will be
+    // communicated by NULL
     if (dest != MPI_PROC_NULL)
-      // We have a neighbour on the left
-      // So update every cell, starting from 0
+      // We have a neighbour on the left.
+      // So we can update every cell, starting from 1, skipping the halo cell
       udim[0][direction] = 1;
     else
-      // When no neighbour on the left, Dirichlet BC, no need to update the 0th
+      // When no neighbour on the left.
+      // This means this cell is on the boundary for this direction.
+      // So skip over first two cells, because halo is now meaningless,
+      // and the next cell is zero by Dirichlet BC, so no need to update.
       udim[0][direction] = 2;
+
     if (source != MPI_PROC_NULL)
-      // Neighbour on the left, so index is the last one
-      udim[1][direction] = loca_dim[direction];
+      // Neighbour on the right, so index is the last one
+      // loca_dim + 2 is the number of cells, so -1 will be the index of the
+      // last cell so -2 will be the last non-halo cell.
+      udim[1][direction] = loca_dim[direction] + 2 - 2;
     else
-      // No neighbour, Dirichlet BC, so no need to update this
-      udim[1][direction] = loca_dim[direction] - 1;
+      // No neighbour, Dirichlet BC, so no need to update the very last
+      // non-halo.
+      udim[1][direction] = loca_dim[direction] + 2 - 2 - 1;
   }
+  if (myid_grid == 0)
+    assert(udim[0][0] == 2 && udim[0][1] == 2 && udim[0][2] == 2 &&
+           udim[1][0] == 3 && udim[1][1] == 5 && udim[1][2] == 5);
+  if (myid_grid == 1)
+    assert(udim[0][0] == 1 && udim[0][1] == 2 && udim[0][2] == 2 &&
+           udim[1][0] == 2 && udim[1][1] == 5 && udim[1][2] == 5);
 
   // Begin iterations
   maxdelta = 2. * eps;
@@ -234,12 +263,16 @@ int main(int argc, char *argv[]) {
       for (int direction = 0; direction < 3; ++direction) {
         MPI_Cart_shift(GRID_COMM_WORLD, direction, displacement, &source,
                        &dest);
+        //        std::cout << "Rank " << myid_grid << ": Direction " <<
+        //        direction << ", Disp " << displacement
+        //          << " gives source " << source << " and dest " << dest<<
+        //          std::endl;
 
         if (source != MPI_PROC_NULL)
           // We have a neighbour, so we receive into fieldRecv, the total
           // msgsize amount of data in that given direction. Irecv so that
           // everybody is ready to receive before everybody sends
-          // TODO Replace this with SendRecv_replace?
+          // TODO Replace this with MPI_SendRecv_replace?
           MPI_Irecv(&fieldRecv[0], totmsgsize[direction], MPI_DOUBLE_PRECISION,
                     source, tag, GRID_COMM_WORLD, &req);
 
@@ -262,36 +295,37 @@ int main(int argc, char *argv[]) {
         }
       }
     }
-    // All communication done, we have the latest values. Now compute new values
-    Jacobi_sweep(loca_dim[2], loca_dim[1], loca_dim[0], phi, t0, t1, udim, h,
-                 maxdelta);
 
+    // All communication done, we have the latest values. Now compute new values
+    Jacobi_sweep(phi, t0, t1, udim, h, maxdelta);
+    std::cout << "Maxdelta in rank " << myid_grid << " is " << maxdelta
+              << std::endl;
     // Find the largest delta amongst all ranks, and set it to the max_delta in
     // every rank
     MPI_Allreduce(MPI_IN_PLACE, &maxdelta, 1, MPI_DOUBLE_PRECISION, MPI_MAX,
                   GRID_COMM_WORLD);
 
-    if (myid == 0) {
-      std::cout << std::fixed;
-      std::cout << iter << ", " << maxdelta << std::endl;
+//    write_rectilinear_grid(myid_grid, iEnd, jEnd, kEnd, ({0,1}), ({0,1}), ({0,1}), phi, iter, t1);
 
-      // New becomes old
-      std::swap(t0, t1);
+    if (myid == 0) {
+      std::cout << iter << ", " << maxdelta << std::endl;
     }
+    // New becomes old
+    std::swap(t0, t1);
   }
 
   ierr = MPI_Finalize();
 
-  write_rectilinear_grid(myid_grid, loca_dim[2], loca_dim[1], loca_dim[0], phi,
-                         0., 0);
+//  write_rectilinear_grid(myid_grid, loca_dim[2], loca_dim[1], loca_dim[0], phi, 0., 1);
   return ierr;
 }
 
+// copies a face of phi (and not the layer of halo cells)
+// into a linear array.
 void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
                  int jEnd, int kStart, int kEnd, int disp, int direction,
                  double *fieldSend, int MaxBufLen) {
   int i1, i2, j1, j2, k1, k2, c;
-  int i, j, k;
 
   if (direction < 0 || direction > 2) {
     std::cout << "CSB: dir is wrong\n";
@@ -302,7 +336,9 @@ void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     exit(1);
   }
 
-  if (direction == 0) {
+  // i2 and iEnd are both counts, so -1 is enough
+  if (direction == 2) {
+    // So we are dealing with a face parallel to the z-axis
     // skip the halo
     i1 = iStart + 1;
     i2 = iEnd - 1;
@@ -326,7 +362,7 @@ void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
       j1 = j2 = 1;
     else
       j1 = j2 = jEnd - 1;
-  } else if (direction == 2) {
+  } else if (direction == 0) {
     j1 = jStart + 1;
     j2 = jEnd - 1;
     k1 = kStart + 1;
@@ -363,7 +399,8 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     exit(1);
   }
 
-  if (dir == 0) {
+  if (dir == 2) {
+    // Same logic as in Send
     i1 = iStart + 1;
     i2 = iEnd - 1;
     j1 = jStart + 1;
@@ -371,8 +408,10 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
 
     // We are receiving into the halo cells on the correct face
     if (disp == 1)
+      // receiving from above
       k1 = k2 = 0;
     else
+      // receiving from below
       k1 = k2 = kEnd;
 
   } else if (dir == 1) {
@@ -386,7 +425,7 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     else
       j1 = j2 = jEnd;
 
-  } else if (dir == 2) {
+  } else if (dir == 0) {
     j1 = jStart + 1;
     j2 = jEnd - 1;
     k1 = kStart + 1;
@@ -398,7 +437,7 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
       i1 = i2 = iEnd;
   }
 
-  c = 1;
+  c = 0;
   for (int k = k1; k < k2; ++k)
     for (int j = j1; j < j2; ++j)
       for (int i = i1; i < i2; ++i) {
@@ -408,17 +447,16 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
   return;
 }
 
-void Jacobi_sweep(int nx, int ny, int nz, double ****phi, int t0, int t1,
-                  int **udim, double h, double &maxdelta) {
+void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
+                  double &maxdelta) {
   double rhs = 1.0;
   double one_over_six = 1. / 6.;
 
-  int i, j, k;
   maxdelta = 0.;
 
-  for (int k = udim[0][0]; k < udim[1][0]; ++k)
-    for (int j = udim[0][1]; j < udim[1][1]; ++j)
-      for (int i = udim[0][2]; i < udim[1][2]; ++i) {
+  for (int i = udim[0][0]; i <= udim[1][0]; ++i)
+    for (int j = udim[0][1]; j <= udim[1][1]; ++j)
+      for (int k = udim[0][2]; k <= udim[1][2]; ++k) {
         phi[i][j][k][t1] =
             (phi[i - 1][j][k][t0] + phi[i + 1][j][k][t0] +
              phi[i][j - 1][k][t0] + phi[i][j + 1][k][t0] +
@@ -431,13 +469,19 @@ void Jacobi_sweep(int nx, int ny, int nz, double ****phi, int t0, int t1,
 
 // from
 // https://github.com/cpraveen/cfdlab/blob/ee0a423956f216d7120e338c4026391c48b219e5/vtk/vtk_struct.cc#L7
-void write_rectilinear_grid(int id, int nx, int ny, int nz, double ****var,
+void write_rectilinear_grid(int id, int **start_stop, double xlim[2],
+                            double ylim[2], double zlim[2], double ****var,
                             double t, int c) {
+  std::cout << "WRG out of service\n";
+  return;
   using namespace std;
 
+  int nx = start_stop[1][0] - start_stop[0][0];
+  int ny = start_stop[1][1] - start_stop[0][1];
+  int nz = start_stop[1][2] - start_stop[0][2];
   ofstream fout;
   char filename[64];
-  sprintf(filename, "rect%d.vtk", id);
+  snprintf(filename, 64, "r%d-sol-t%d.vtk", id, (int)t);
   fout.open(filename);
   fout << "# vtk DataFile Version 3.0" << endl;
   fout << "Cartesian grid" << endl;
@@ -450,29 +494,27 @@ void write_rectilinear_grid(int id, int nx, int ny, int nz, double ****var,
   fout << c << endl;
   fout << "DIMENSIONS " << nx << " " << ny << " " << nz << endl;
   fout << "X_COORDINATES " << nx << " float" << endl;
-  for (int i = 0; i < nx; ++i)
-    // TODO don't hardcode this!
-    fout << i * 1. / (nx - 1) << " ";
+  for (int i = start_stop[0][0]; i < start_stop[1][0]; ++i)
+    fout << xlim[0] + (xlim[1] - xlim[0]) * i * 1. / (nx - 1) << " ";
   fout << endl;
   fout << "Y_COORDINATES " << ny << " float" << endl;
-  for (int j = 0; j < ny; ++j)
-    fout << j * 1. / (ny - 1) << " ";
+  for (int j = start_stop[0][1]; j < start_stop[1][1]; ++j)
+    fout << ylim[0] + (ylim[1] - ylim[0]) * j * 1. / (ny - 1) << " ";
   fout << endl;
   fout << "Z_COORDINATES " << nz << " float" << endl;
-  for (int k = 0; k < nz; ++k)
-    fout << k * 1. / (nz - 1) << " ";
+  for (int k = start_stop[0][2]; k < start_stop[1][2]; ++k)
+    fout << zlim[0] + (zlim[1] - zlim[0]) * k * 1. / (nz - 1) << " ";
 
   fout << "POINT_DATA " << nx * ny * nz << endl;
   fout << "SCALARS density float" << endl;
   fout << "LOOKUP_TABLE default" << endl;
-  // no need for k-loop since nk=1
-  for (int j = 0; j < ny; ++j) {
-    for (int i = 0; i < nx; ++i)
-      for (int k = 0; k < nz; ++k)
+  for (int k = start_stop[0][2]; k < start_stop[1][2]; ++k)
+    for (int j = start_stop[0][1]; j < start_stop[1][1]; ++j){ 
+      for (int i = start_stop[0][0]; i < start_stop[1][0]; ++i)
         fout << var[i][j][k][(int)t] << " ";
-    fout << endl;
-  }
+      fout << endl;
+    }
   fout.close();
 
-  cout << "Wrote Cartesian grid into rect" << id << ".vtk" << endl;
+  cout << "Wrote Cartesian grid into " << filename << endl;
 }

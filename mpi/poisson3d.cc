@@ -24,9 +24,8 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
 void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
                   double &maxdelta);
 
-void write_rectilinear_grid(int id, int, int, int, int, int, int,
-                            double **limits, double ****var, double t, int iter,
-                            int c);
+void write_rectilinear_grid(int id, int **output_indices, double **limits,
+                            double ****var, double t, int iter, int c);
 
 int main(int argc, char *argv[]) {
   // Mark whether boundaries are periodic or not
@@ -83,8 +82,6 @@ int main(int argc, char *argv[]) {
     // Number of ranks for each dimension
     getline(input, line);
     sscanf(line.c_str(), "%d %d %d", &proc_dim[0], &proc_dim[1], &proc_dim[2]);
-    std::cout << tmp << std::endl;
-    std::cout << proc_dim[1] << std::endl;
 
     getline(input, line);
     sscanf(line.c_str(), "%d", &itermax);
@@ -216,17 +213,6 @@ int main(int argc, char *argv[]) {
 
   displacement = -1;
 
-  double **limits;
-  // TODO This isn't accurate when spat_dim not div by proc_dim
-  for (int dir = 0; dir < 3; ++dir) {
-    limits[dir] = new double[2];
-    limits[dir][0] = mycoord[dir] * loca_dim[dir] * h;
-    limits[dir][1] = ((mycoord[dir] + 1) * loca_dim[dir] - 1) * h;
-  }
-  if (myid_grid <= 3)
-    std::cout << "X Limits: " << limits[0][0] << ',' << limits[0][1]
-              << std::endl;
-
   // udim is different for each rank, and stores which points to update
   // and which ones to ignore because they will be filled in Dirichlet BC.
   for (int direction = 0; direction < 3; ++direction) {
@@ -243,11 +229,11 @@ int main(int argc, char *argv[]) {
 
     // If boundary isn't periodic, then shifting out of range will be
     // communicated by NULL
-    if (dest != MPI_PROC_NULL)
+    if (dest != MPI_PROC_NULL) {
       // We have a neighbour on the left.
       // So we can update every cell, starting from 1, skipping the halo cell
       udim[0][direction] = 1;
-    else
+    } else
       // When no neighbour on the left.
       // This means this cell is on the boundary for this direction.
       // So skip over first two cells, because halo is now meaningless,
@@ -281,10 +267,7 @@ int main(int argc, char *argv[]) {
       for (int direction = 0; direction < 3; ++direction) {
         MPI_Cart_shift(GRID_COMM_WORLD, direction, displacement, &source,
                        &dest);
-        //        if (myid_grid == 1 && source != MPI_PROC_NULL && dest !=
-        //        MPI_PROC_NULL)
-        //          std::cout << iStart << ' ' << iEnd << ' '<< jStart << ' ' <<
-        //          jEnd  << ' '<< kStart  << ' ' << kEnd << std::endl;
+
         if (source != MPI_PROC_NULL)
           // We have a neighbour, so we receive into fieldRecv, the total
           // msgsize amount of data in that given direction. Irecv so that
@@ -328,11 +311,29 @@ int main(int argc, char *argv[]) {
     std::swap(t0, t1);
   }
 
-  ierr = MPI_Finalize();
+  // Some calculations for the VTK output
+  double **limits = new double *[3];
+  int **output_indices = new int *[3];
+  // TODO This isn't accurate when spat_dim not div by proc_dim
+  for (int dir = 0; dir < 3; ++dir) {
+    limits[dir] = new double[2];
+    limits[dir][0] = mycoord[dir] * loca_dim[dir] * h;
+    limits[dir][1] = (((mycoord[dir] + 1) * loca_dim[dir]) - 1) * h;
 
-  write_rectilinear_grid(myid_grid, iStart + 1, jStart + 1, kStart + 1,
-                         iEnd - 1, jEnd - 1, kEnd - 1, limits, phi, t0, itermax,
+    output_indices[dir] = new int[2];
+  }
+  output_indices[0][0] = iStart + 1;
+  output_indices[0][1] = iEnd - 1;
+  output_indices[1][0] = jStart + 1;
+  output_indices[1][1] = jEnd - 1;
+  output_indices[2][0] = kStart + 1;
+  output_indices[2][1] = kEnd - 1;
+
+  if (myid_grid == 0)
+    std::cout << "\n!NBLOCKS " << nump_grid << std::endl;
+  write_rectilinear_grid(myid_grid, output_indices, limits, phi, t0, itermax,
                          0);
+  ierr = MPI_Finalize();
   return ierr;
 }
 
@@ -489,13 +490,12 @@ void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
 /*
  * Writes out a VTK file with the given slice of an array
  */
-void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
-                            int k2, double **limits, double ****var, double t,
-                            int iter, int c) {
+void write_rectilinear_grid(int id, int **index_range, double **limits,
+                            double ****var, double t, int iter, int c) {
   using namespace std;
-  int nx = i2 - i1;
-  int ny = j2 - j1;
-  int nz = k2 - k1;
+  int n[3];
+  for (int dir = 0; dir < 3; ++dir)
+    n[dir] = index_range[dir][1] - index_range[dir][0];
 
   ofstream fout;
   char filename[64];
@@ -511,34 +511,37 @@ void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
   fout << t << endl;
   fout << "CYCLE 1 1 int" << endl;
   fout << c << endl;
-  fout << "DIMENSIONS " << nx << " " << ny << " " << nz << endl;
-  fout << "X_COORDINATES " << nx << " float" << endl;
+  fout << "DIMENSIONS " << n[0] << " " << n[1] << " " << n[2] << endl;
+  fout << "X_COORDINATES " << n[0] << " float" << endl;
 
-  for (int i = 0; i < nx; ++i)
-    fout << limits[0][0] + (limits[0][1] - limits[0][0]) * i * 1. / (nx - 1) << " ";
+  for (int i = 0; i < n[0]; ++i)
+    fout << limits[0][0] + (limits[0][1] - limits[0][0]) * i * 1. / (n[0] - 1)
+         << " ";
   fout << endl;
 
-  fout << "Y_COORDINATES " << ny << " float" << endl;
-  for (int j = j1; j < j2; ++j)
-    fout << limits[1][0] + (limits[1][1] - limits[1][0]) * j * 1. / (ny - 1) << " ";
+  fout << "Y_COORDINATES " << n[1] << " float" << endl;
+  for (int j = 0; j < n[1]; ++j)
+    fout << limits[1][0] + (limits[1][1] - limits[1][0]) * j * 1. / (n[1] - 1)
+         << " ";
   fout << endl;
 
-  fout << "Z_COORDINATES " << nz << " float" << endl;
-  for (int k = k1; k < k2; ++k)
-    fout << limits[2][0] + (limits[2][1] - limits[2][0]) * k * 1. / (nz - 1) << " ";
+  fout << "Z_COORDINATES " << n[2] << " float" << endl;
+  for (int k = 0; k < n[2]; ++k)
+    fout << limits[2][0] + (limits[2][1] - limits[2][0]) * k * 1. / (n[2] - 1)
+         << " ";
+  fout << endl;
 
-  fout << "POINT_DATA " << nx * ny * nz << endl;
+  fout << "POINT_DATA " << n[0] * n[1] * n[2] << endl;
   fout << "SCALARS density double" << endl;
   fout << "LOOKUP_TABLE default" << endl;
-  for (int k = k1; k < k2; ++k) {
-    for (int j = j1; j < j2; ++j) {
-      for (int i = i1; i < i2; ++i)
+  for (int k = index_range[2][0]; k < index_range[2][1]; ++k) {
+    for (int j = index_range[1][0]; j < index_range[1][1]; ++j) {
+      for (int i = index_range[0][0]; i < index_range[0][1]; ++i)
         fout << var[i][j][k][(int)t] << " ";
       fout << endl;
     }
     fout << endl;
   }
   fout.close();
-
-  cout << "Wrote Cartesian grid into " << filename << endl;
+  cout << filename << endl;
 }

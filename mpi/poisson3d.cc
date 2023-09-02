@@ -7,10 +7,10 @@
  */
 #include <algorithm>
 #include <cmath>
-#include <stdio.h>
 #include <fstream>
 #include <iostream>
 #include <mpi.h>
+#include <stdio.h>
 #include <string>
 
 void CopySendBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
@@ -24,9 +24,9 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
 void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
                   double &maxdelta);
 
-void write_rectilinear_grid(int id, int, int, int, int, int, int, double *xlim,
-                            double *ylim, double *zlim, double ****var,
-                            double t, int iter, int c);
+void write_rectilinear_grid(int id, int, int, int, int, int, int,
+                            double **limits, double ****var, double t, int iter,
+                            int c);
 
 int main(int argc, char *argv[]) {
   // Mark whether boundaries are periodic or not
@@ -83,7 +83,7 @@ int main(int argc, char *argv[]) {
     // Number of ranks for each dimension
     getline(input, line);
     sscanf(line.c_str(), "%d %d %d", &proc_dim[0], &proc_dim[1], &proc_dim[2]);
-    std::cout << tmp<< std::endl;
+    std::cout << tmp << std::endl;
     std::cout << proc_dim[1] << std::endl;
 
     getline(input, line);
@@ -170,18 +170,11 @@ int main(int argc, char *argv[]) {
       loca_dim[i] += 1;
   }
 
-  // TODO This isn't accurate when spat_dim not div by proc_dim
-  double xlim[] = {mycoord[0] * loca_dim[0] * h,
-                   (mycoord[0] + 1) * loca_dim[0] * h};
-  double ylim[] = {mycoord[1] * loca_dim[1] * h,
-                   (mycoord[1] + 1) * loca_dim[1] * h};
-  double zlim[] = {mycoord[2] * loca_dim[2] * h,
-                   (mycoord[2] + 1) * loca_dim[2] * h};
-
   // Solution variables
   // One layer of ghost points on all sides, so 2 extra indices
   // These are the first and last indices along each direction.
-  // So iEnd is the number (count) of cells along each dimension, not last index.
+  // So iEnd is the number (count) of cells along each dimension, not last
+  // index.
   iStart = 0;
   iEnd = loca_dim[0] + 2;
   jStart = 0;
@@ -222,6 +215,17 @@ int main(int argc, char *argv[]) {
   fieldRecv = new double[MaxBufLen];
 
   displacement = -1;
+
+  double **limits;
+  // TODO This isn't accurate when spat_dim not div by proc_dim
+  for (int dir = 0; dir < 3; ++dir) {
+    limits[dir] = new double[2];
+    limits[dir][0] = mycoord[dir] * loca_dim[dir] * h;
+    limits[dir][1] = ((mycoord[dir] + 1) * loca_dim[dir] - 1) * h;
+  }
+  if (myid_grid <= 3)
+    std::cout << "X Limits: " << limits[0][0] << ',' << limits[0][1]
+              << std::endl;
 
   // udim is different for each rank, and stores which points to update
   // and which ones to ignore because they will be filled in Dirichlet BC.
@@ -272,16 +276,15 @@ int main(int argc, char *argv[]) {
   // messages
   tag = 0;
 
-  for (int iter = 0; iter < itermax && maxdelta > eps; ++iter) {
+  for (int iter = 1; iter <= itermax && maxdelta > eps; ++iter) {
     for (int displacement : {-1, 1}) {
       for (int direction = 0; direction < 3; ++direction) {
         MPI_Cart_shift(GRID_COMM_WORLD, direction, displacement, &source,
                        &dest);
-        //        std::cout << "Rank " << myid_grid << ": Direction " <<
-        //        direction << ", Disp " << displacement
-        //          << " gives source " << source << " and dest " << dest<<
-        //          std::endl;
-
+        //        if (myid_grid == 1 && source != MPI_PROC_NULL && dest !=
+        //        MPI_PROC_NULL)
+        //          std::cout << iStart << ' ' << iEnd << ' '<< jStart << ' ' <<
+        //          jEnd  << ' '<< kStart  << ' ' << kEnd << std::endl;
         if (source != MPI_PROC_NULL)
           // We have a neighbour, so we receive into fieldRecv, the total
           // msgsize amount of data in that given direction. Irecv so that
@@ -328,8 +331,8 @@ int main(int argc, char *argv[]) {
   ierr = MPI_Finalize();
 
   write_rectilinear_grid(myid_grid, iStart + 1, jStart + 1, kStart + 1,
-                         iEnd - 1, jEnd - 1, kEnd - 1, &(xlim[0]), &(ylim[0]),
-                         &(zlim[0]), phi, t0, itermax, 0);
+                         iEnd - 1, jEnd - 1, kEnd - 1, limits, phi, t0, itermax,
+                         0);
   return ierr;
 }
 
@@ -426,7 +429,7 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
       k1 = k2 = 0;
     else
       // receiving from below
-      k1 = k2 = kEnd-1;
+      k1 = k2 = kEnd - 1;
 
   } else if (dir == 1) {
     i1 = iStart + 1;
@@ -437,7 +440,7 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     if (disp == 1)
       j1 = j2 = 0;
     else
-      j1 = j2 = jEnd-1;
+      j1 = j2 = jEnd - 1;
 
   } else if (dir == 0) {
     j1 = jStart + 1;
@@ -448,7 +451,7 @@ void CopyRecvBuf(double ****phi, int t, int iStart, int iEnd, int jStart,
     if (disp == 1)
       i1 = i2 = 0;
     else
-      i1 = i2 = iEnd-1;
+      i1 = i2 = iEnd - 1;
   }
 
   c = 0;
@@ -487,8 +490,8 @@ void Jacobi_sweep(double ****phi, int t0, int t1, int **udim, double h,
  * Writes out a VTK file with the given slice of an array
  */
 void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
-                            int k2, double *xlim, double *ylim, double *zlim,
-                            double ****var, double t, int iter, int c) {
+                            int k2, double **limits, double ****var, double t,
+                            int iter, int c) {
   using namespace std;
   int nx = i2 - i1;
   int ny = j2 - j1;
@@ -510,16 +513,19 @@ void write_rectilinear_grid(int id, int i1, int j1, int k1, int i2, int j2,
   fout << c << endl;
   fout << "DIMENSIONS " << nx << " " << ny << " " << nz << endl;
   fout << "X_COORDINATES " << nx << " float" << endl;
-  for (int i = i1; i < i2; ++i)
-    fout << xlim[0] + (xlim[1] - xlim[0]) * i * 1. / (nx-1) << " ";
+
+  for (int i = 0; i < nx; ++i)
+    fout << limits[0][0] + (limits[0][1] - limits[0][0]) * i * 1. / (nx - 1) << " ";
   fout << endl;
+
   fout << "Y_COORDINATES " << ny << " float" << endl;
-  for (int j = j1; j <j2; ++j)
-    fout << ylim[0] + (ylim[1] - ylim[0]) * j * 1. / (ny - 1) << " ";
+  for (int j = j1; j < j2; ++j)
+    fout << limits[1][0] + (limits[1][1] - limits[1][0]) * j * 1. / (ny - 1) << " ";
   fout << endl;
+
   fout << "Z_COORDINATES " << nz << " float" << endl;
   for (int k = k1; k < k2; ++k)
-    fout << zlim[0] + (zlim[1] - zlim[0]) * k * 1. / (nz - 1) << " ";
+    fout << limits[2][0] + (limits[2][1] - limits[2][0]) * k * 1. / (nz - 1) << " ";
 
   fout << "POINT_DATA " << nx * ny * nz << endl;
   fout << "SCALARS density double" << endl;
